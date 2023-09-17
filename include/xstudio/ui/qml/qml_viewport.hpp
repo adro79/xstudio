@@ -34,11 +34,12 @@ namespace ui {
 
             Q_PROPERTY(float zoom READ zoom WRITE setZoom NOTIFY zoomChanged)
             Q_PROPERTY(bool frameOutOfRange READ frameOutOfRange NOTIFY frameOutOfRangeChanged)
+            Q_PROPERTY(bool noAlphaChannel READ noAlphaChannel NOTIFY noAlphaChannelChanged)
             Q_PROPERTY(QString fpsExpression READ fpsExpression NOTIFY fpsExpressionChanged)
             Q_PROPERTY(float scale READ scale WRITE setScale NOTIFY scaleChanged)
             Q_PROPERTY(
                 QVector2D translate READ translate WRITE setTranslate NOTIFY translateChanged)
-            Q_PROPERTY(QObject *playhead READ playhead WRITE setPlayhead NOTIFY playheadChanged)
+            Q_PROPERTY(QObject *playhead READ playhead NOTIFY playheadChanged)
             Q_PROPERTY(QStringList colourUnderCursor READ colourUnderCursor NOTIFY
                            colourUnderCursorChanged)
             Q_PROPERTY(int mouseButtons READ mouseButtons NOTIFY mouseButtonsChanged)
@@ -49,6 +50,7 @@ namespace ui {
                            imageBoundaryInViewportChanged)
             Q_PROPERTY(QSize imageResolution READ imageResolution NOTIFY imageResolutionChanged)
             Q_PROPERTY(bool enableShortcuts READ enableShortcuts NOTIFY enableShortcutsChanged)
+            Q_PROPERTY(QString name READ name NOTIFY nameChanged)
 
           public:
             QMLViewport(QQuickItem *parent = nullptr);
@@ -59,13 +61,16 @@ namespace ui {
             QVector2D translate();
             QObject *playhead();
             [[nodiscard]] QStringList colourUnderCursor() const { return colour_under_cursor; }
+            [[nodiscard]] QString name() const;
             [[nodiscard]] int mouseButtons() const { return mouse_buttons; }
             [[nodiscard]] QPoint mouse() const { return mouse_position; }
             [[nodiscard]] int onScreenImageLogicalFrame() const {
                 return on_screen_logical_frame_;
             }
             [[nodiscard]] bool frameOutOfRange() const { return frame_out_of_range_; }
+            [[nodiscard]] bool noAlphaChannel() const { return no_alpha_channel_; }
             [[nodiscard]] bool enableShortcuts() const { return enable_shortcuts_; }
+            void setPlayhead(caf::actor playhead);
 
           protected:
             void mousePressEvent(QMouseEvent *event) override;
@@ -82,7 +87,6 @@ namespace ui {
 
             void sync();
             void cleanup();
-            void setPlayhead(QObject *playhead_qobject);
             void setZoom(const float z);
             void revertFitZoomToPrevious(const bool ignoreOtherViewport = false);
             void handleScreenChanged(QScreen *screen);
@@ -97,6 +101,7 @@ namespace ui {
             void setOnScreenImageLogicalFrame(const int frame_num);
             QRectF imageBoundaryInViewport();
             void setFrameOutOfRange(bool frame_out_of_range);
+            void setNoAlphaChannel(bool no_alpha_channel);
             QString renderImageToFile(
                 const QUrl filePath,
                 const int format,
@@ -108,8 +113,6 @@ namespace ui {
             void setOverrideCursor(const QString &name, const bool centerOffset);
             void setOverrideCursor(const Qt::CursorShape cname);
             void setRegularCursor(const Qt::CursorShape cname);
-
-            void setOtherViewport(QObject *object);
 
           private slots:
 
@@ -129,8 +132,10 @@ namespace ui {
             void imageBoundaryInViewportChanged();
             void imageResolutionChanged();
             void frameOutOfRangeChanged();
+            void noAlphaChannelChanged();
             void enableShortcutsChanged();
             void doSnapshot(QString, QString, int, int, bool);
+            void nameChanged();
 
           private:
             void releaseResources() override;
@@ -143,19 +148,18 @@ namespace ui {
             QMLViewportRenderer *renderer_actor{nullptr};
             PlayheadUI *playhead_{nullptr};
             static qt::OffscreenViewport *offscreen_viewport_;
-            QMLViewport *other_viewport{nullptr};
 
             bool connected_{false};
             QCursor cursor_;
             bool cursor_hidden{false};
-            QString current_fit_action, previous_fit_action;
             QStringList colour_under_cursor{"--", "--", "--"};
             int mouse_buttons = {0};
             QPoint mouse_position;
             int on_screen_logical_frame_ = {0};
             bool frame_out_of_range_     = {false};
-            bool is_primary_viewport_    = {true};
+            bool no_alpha_channel_       = {false};
             bool enable_shortcuts_       = {true};
+            int viewport_index_          = {0};
         };
 
     } // namespace qml

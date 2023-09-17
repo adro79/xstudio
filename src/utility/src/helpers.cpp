@@ -34,6 +34,70 @@ namespace fs = std::filesystem;
 // 	  return err;
 // 	}
 // }
+
+static std::shared_ptr<ActorSystemSingleton> s_actor_system_singleton;
+
+caf::actor_system &ActorSystemSingleton::actor_system_ref(caf::actor_system &sys) {
+
+    // Note that this function is called when instancing the xstudio python module and
+    // allows it to grab a reference to the application actor system (if there is one -
+    // which will be the case if we're in the embedded interpreter in xstudio). If the
+    // python module is instanced outside of an xstudio application, there will be no
+    // existing application actor system so essentially 'sys' is returned. In that case
+    // 'sys' will be a reference to an actor system that is local to the python module
+    // itself.
+
+    if (!s_actor_system_singleton) {
+        // no instance of ActorSystemSingleton exists yet, so create one and
+        // grab a rederence to 'sys'
+        s_actor_system_singleton.reset(new ActorSystemSingleton(sys));
+    } else {
+        // in this case, 'sys' is ignored/unused and we return the ref to previously
+        // created actor_system. We do this to ensure that the python module, when
+        // running in the embedded interpreter in the xstudio application, will spawn
+        // actors within the application system.
+    }
+    return s_actor_system_singleton->get_system();
+}
+
+std::string xstudio::utility::actor_to_string(caf::actor_system &sys, const caf::actor &actor) {
+    std::string result;
+
+    try {
+        caf::binary_serializer::container_type buf;
+        caf::binary_serializer bs{sys, buf};
+
+        auto e = bs.apply(caf::actor_cast<caf::actor_addr>(actor));
+        if (not e)
+            throw std::runtime_error(to_string(bs.get_error()));
+
+        result = utility::make_hex_string(std::begin(buf), std::end(buf));
+    } catch (const std::exception &err) {
+        // spdlog::warn("{} {}", __PRETTY_FUNCTION__, err.what());
+    }
+
+    return result;
+}
+
+caf::actor
+xstudio::utility::actor_from_string(caf::actor_system &sys, const std::string &str_addr) {
+    caf::actor actor;
+
+    caf::binary_serializer::container_type buf = utility::hex_to_bytes(str_addr);
+    caf::binary_deserializer bd{sys, buf};
+
+    caf::actor_addr addr;
+    auto e = bd.apply(addr);
+
+    if (not e) {
+        spdlog::debug("{} {}", __PRETTY_FUNCTION__, to_string(bd.get_error()));
+    } else {
+        actor = caf::actor_cast<caf::actor>(addr);
+    }
+
+    return actor;
+}
+
 void xstudio::utility::join_broadcast(caf::event_based_actor *source, caf::actor actor) {
     source->request(actor, caf::infinite, broadcast::join_broadcast_atom_v)
         .then(
@@ -132,6 +196,89 @@ std::string xstudio::utility::exec(const std::vector<std::string> &cmd, int &exi
     }
 
     return output;
+}
+
+std::string xstudio::utility::uri_to_posix_path(const caf::uri &uri) {
+    if (uri.path().data()) {
+        // spdlog::warn("{} {}",uri.path().data(), uri_decode(uri.path().data()));
+        std::string path = uri_decode(uri.path().data());
+        if (not path.empty() and path[0] != '/' and not uri.authority().empty()) {
+            path = "/" + path;
+        }
+        return path;
+    }
+    return "";
+}
+
+std::string xstudio::utility::uri_encode(const std::string &s) {
+    std::string result;
+    result.reserve(s.size());
+    auto params = false;
+    std::array<char, 4> hex;
+
+    for (size_t i = 0; s[i]; i++) {
+        switch (s[i]) {
+        case ' ':
+            result += "%20";
+            break;
+        case '+':
+            result += "%2B";
+            break;
+        case '\r':
+            result += "%0D";
+            break;
+        case '\n':
+            result += "%0A";
+            break;
+        case '\'':
+            result += "%27";
+            break;
+        case ',':
+            result += "%2C";
+            break;
+        // case ':': result += "%3A"; break; // ok? probably...
+        case ';':
+            result += "%3B";
+            break;
+        default:
+            auto c = static_cast<uint8_t>(s[i]);
+            if (c == '?')
+                params = true;
+
+            if (not params and c == '&') {
+                result += "%26";
+            } else if (c >= 0x80) {
+                result += '%';
+                auto len = snprintf(hex.data(), hex.size() - 1, "%02X", c);
+                assert(len == 2);
+                result.append(hex.data(), static_cast<size_t>(len));
+            } else {
+                result += s[i];
+            }
+            break;
+        }
+    }
+
+    return result;
+}
+
+
+//  DIRTY REPLACE (does caf support this?)
+std::string xstudio::utility::uri_decode(const std::string &eString) {
+    std::string ret;
+    char ch;
+    unsigned int i, j;
+    for (i = 0; i < eString.length(); i++) {
+        if (int(eString[i]) == 37) {
+            sscanf(eString.substr(i + 1, 2).c_str(), "%x", &j);
+            ch = static_cast<char>(j);
+            ret += ch;
+            i = i + 2;
+        } else {
+            ret += eString[i];
+        }
+    }
+    return (ret);
 }
 
 

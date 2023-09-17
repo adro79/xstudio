@@ -11,7 +11,6 @@ CAF_PUSH_WARNINGS
 CAF_POP_WARNINGS
 
 #include "xstudio/ui/qml/helper_ui.hpp"
-#include "xstudio/ui/qml/media_ui.hpp"
 #include "xstudio/utility/frame_time.hpp"
 
 namespace xstudio {
@@ -86,7 +85,9 @@ namespace ui {
             Q_PROPERTY(QString timecodeEnd READ timecodeEnd NOTIFY timecodeEndChanged)
             Q_PROPERTY(
                 QString timecodeDuration READ timecodeDuration NOTIFY timecodeDurationChanged)
-            Q_PROPERTY(QObject *media READ media NOTIFY mediaChanged)
+
+            Q_PROPERTY(QUuid mediaUuid READ mediaUuid NOTIFY mediaUuidChanged)
+
             Q_PROPERTY(QString uuid READ uuid NOTIFY uuidChanged)
             Q_PROPERTY(QString name READ name NOTIFY nameChanged)
             Q_PROPERTY(int loopStart READ loopStart WRITE setLoopStart NOTIFY loopStartChanged)
@@ -103,6 +104,8 @@ namespace ui {
             Q_PROPERTY(QList<TimesliderMarker *> bookmarkedFrames READ bookmarkedFrames NOTIFY
                            bookmarkedFramesChanged)
 
+            Q_PROPERTY(bool isNull READ isNull NOTIFY isNullChanged)
+
           public:
             explicit PlayheadUI(QObject *parent = nullptr);
             ~PlayheadUI() override = default;
@@ -111,6 +114,8 @@ namespace ui {
             void set_backend(caf::actor backend);
 
             caf::actor backend() { return backend_; }
+
+            [[nodiscard]] QUuid mediaUuid() const { return media_uuid_; }
 
             [[nodiscard]] bool playing() const { return playing_; }
             void setPlaying(const bool playing);
@@ -135,6 +140,8 @@ namespace ui {
             void setPlayheadRate(const double playhead_rate);
 
             [[nodiscard]] double rate() const { return rate_; }
+
+            [[nodiscard]] bool isNull() const { return !bool(backend_); }
             // void setRate(const double rate);
 
             [[nodiscard]] QList<QPoint> cachedFrames() const { return cache_detail_; }
@@ -165,8 +172,6 @@ namespace ui {
 
             [[nodiscard]] int sourceOffsetFrames() const { return source_offset_frames_; }
             void setSourceOffsetFrames(int i);
-
-            QObject *media() { return media_; }
 
             [[nodiscard]] QString uuid() const {
                 return QString::fromStdString(to_string(uuid_));
@@ -201,7 +206,6 @@ namespace ui {
             void playheadRateChanged();
             void rateChanged();
             void playRateModeChanged();
-            void mediaChanged();
             void playlistSelectionThingChanged();
             void backendChanged();
             void loopStartChanged();
@@ -220,6 +224,11 @@ namespace ui {
             void keyPlayheadIndexChanged();
             void compareLayerNameChanged();
             void sourceOffsetFramesChanged();
+
+            void isNullChanged();
+
+            void mediaUuidChanged(QUuid);
+
 
           public slots:
 
@@ -287,12 +296,12 @@ namespace ui {
             int compare_mode_;
             int source_offset_frames_;
             QVariant compare_mode_options_;
-            MediaUI *media_{nullptr};
 
             utility::Uuid source_uuid_;
             QList<QPoint> cache_detail_;
             QList<TimesliderMarker *> bookmark_detail_ui_;
             std::vector<std::tuple<utility::Uuid, std::string, int, int>> bookmark_detail_;
+            QUuid media_uuid_;
         };
     } // namespace qml
 } // namespace ui

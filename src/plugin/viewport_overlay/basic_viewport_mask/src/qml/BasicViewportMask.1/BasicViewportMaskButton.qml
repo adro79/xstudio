@@ -9,7 +9,7 @@ XsToolbarItem  {
 
     id: control
     property var value_: value ? value : ""
-    title_: "Mask"
+    title_: "Mask (M)"
     hovered: mouse_area.containsMouse
     showHighlighted: mouse_area.containsMouse | mouse_area.pressed | (activated != undefined && activated)
     property int iconsize: XsStyle.menuItemHeight *.66
@@ -189,7 +189,7 @@ XsToolbarItem  {
         XsModuleAttributesDialog {
             id: settings_dialog
             title: "Viewport Mask Settings"
-            attributesGroupName: "viewport_mask_settings"
+            attributesGroupNames: "viewport_mask_settings"
         }
     
         

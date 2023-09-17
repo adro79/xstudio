@@ -1,12 +1,36 @@
 {
 	"ui": {
 		"qml":{
+			"custom_help_menu": {
+				"path": "/ui/qml/custom_help_menu",
+				"default_value": {"title": "", "url": ""},
+				"description": "Custom help menu item.",
+				"value":  {"title": "", "url": ""},
+				"datatype": "json",
+				"context": ["QML_UI"]
+			},
 			"enable_presentation_mode": {
 				"path": "/ui/qml/enable_presentation_mode",
 				"default_value": false,
 				"description": "Enable presentation mode.",
 				"value": false,
 				"datatype": "bool",
+				"context": ["QML_UI"]
+			},
+			"feedback": {
+				"path": "/ui/qml/feedback",
+				"default_value": "https://github.com/AcademySoftwareFoundation/xstudio/issues",
+				"description": "Method of logging feedback.",
+				"value": "https://github.com/AcademySoftwareFoundation/xstudio/issues",
+				"datatype": "string",
+				"context": ["QML_UI"]
+			},
+			"features": {
+				"path": "/ui/qml/features",
+				"default_value": "",
+				"description": "URL for features.",
+				"value": "",
+				"datatype": "string",
 				"context": ["QML_UI"]
 			},
 			"autosave": {
@@ -160,8 +184,8 @@
 				"datatype": "json",
 				"context": ["QML_UI"]
 			},
-			"media_list_thumnail_size": {
-				"path": "/ui/qml/media_list_thumnail_size",
+			"media_list_thumbnail_size": {
+				"path": "/ui/qml/media_list_thumbnail_size",
 				"default_value": 1.0,
 				"description": "Thumbnail size in media list.",
 				"value": 100.0,
@@ -392,22 +416,6 @@
 				"datatype": "string",
 				"context": ["QML_UI"]
 			},
-			"volume": {
-				"path": "/ui/qml/volume",
-				"default_value": 50,
-				"description": "XPlayer audio volume.",
-				"value": 50,
-				"datatype": "int",
-				"context": ["QML_UI"]
-			},
-			"audio_mute": {
-				"path": "/ui/qml/audio_mute",
-				"default_value": false,
-				"description": "XPlayer audio mute status.",
-				"value": false,
-				"datatype": "bool",
-				"context": ["QML_UI"]
-			},
 			"popout_viewer_visible": {
 				"path": "/ui/qml/popout_viewer_visible",
 				"default_value": false,
@@ -434,10 +442,101 @@
 			},
 			"default_playhead_compare_mode": {
 				"path": "/ui/qml/default_playhead_compare_mode",
-				"default_value": "Off",
+				"default_value": "A/B",
 				"description": "Default Compare Mode.",
-				"value": "Off",
+				"value": "A/B",
 				"datatype": "string",
+				"context": ["QML_UI"]
+			},
+			"default_media_folder": {
+				"path": "/ui/qml/default_media_folder",
+				"default_value": "",
+				"description": "Default media folder",
+				"value": "",
+				"datatype": "string",
+				"context": ["QML_UI"]
+			},
+			"reskin_windows_and_panels_model": {
+				"path": "/ui/qml/reskin_windows_and_panels_model",
+				"default_value": "{}",
+				"description": "Windows layouts",
+				"value": {
+				"children": [
+					{
+						"window_name": "main_window",
+						"width": 800,
+						"height": 800,
+						"position_x": 100,
+						"position_y": 100,
+						"children": [
+							{
+								"split": "heightwise", 
+								"fractional_position": 0.0,
+								"fractional_size": 1.0,
+								"children": [
+									{
+										"split": "widthwise", 
+										"fractional_position": 0.0,
+										"fractional_size": 0.7,
+										"children": [
+											{
+												"panel_source_qml": "../views/timeline/XsTimeline.qml",
+												"fractional_position": 0.0,
+												"fractional_size": 0.5
+											},
+											{
+												"panel_source_qml": "../views/playlists/XsPlaylists.qml",
+												"fractional_position": 0.5,
+												"fractional_size": 0.5
+											}
+										]
+									},
+									{
+										"panel_source_qml": "../views/media/XsMedialist.qml",
+										"fractional_position": 0.7,
+										"fractional_size": 0.3
+									}
+								]
+							}
+						]
+					},
+					{
+						"window_name": "second_window",
+						"children": [
+							{
+								"split": "heightwise", 
+								"fractional_position": 0.0,
+								"fractional_size": 1.0,
+								"children": [
+									{
+										"split": "widthwise", 
+										"fractional_position": 0.0,
+										"fractional_size": 0.7,
+										"children": [
+											{
+												"panel_source_qml": "../views/timeline/XsTimeline.qml",
+												"fractional_position": 0.0,
+												"fractional_size": 0.5
+											},
+											{
+												"panel_source_qml": "../views/playlists/XsPlaylists.qml",
+												"fractional_position": 0.5,
+												"fractional_size": 0.5
+											}
+										]
+									},
+									{
+										"panel_source_qml": "../views/media/XsMedialist.qml",
+										"fractional_position": 0.7,
+										"fractional_size": 0.3
+									}
+								]
+							}
+						]
+					}
+
+				]},
+				"datatype": "json",
 				"context": ["QML_UI"]
 			}
 		}

@@ -24,7 +24,7 @@ Rectangle {
 
     XsModuleAttributesModel {
         id: attrs
-        attributesGroupName: is_main_window ? "main_toolbar" : "popout_toolbar"
+        attributesGroupNames: [viewport.name + "_toolbar", "any_toolbar"]
     }
 
     opacity: 1
@@ -145,7 +145,7 @@ Rectangle {
                 } else if (type == "OnOffToggle") {
                     dynamic_widget = Qt.createQmlObject('import "../base/widgets"; XsToolbarOnOffToggle { anchors.fill: parent}', parent_item)
                 } else {
-                    console.log("WAT TOIPE", type)
+                    console.log("XsToolBar failed to instance widget, unknown type:", type)
                 }
             }
         }

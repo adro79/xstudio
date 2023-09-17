@@ -9,9 +9,6 @@
 #include "xstudio/audio/audio_output_actor.hpp"
 #include "xstudio/bookmark/bookmark.hpp"
 #include "xstudio/broadcast/broadcast_actor.hpp"
-#include "xstudio/broadcast/broadcast_actor.hpp"
-#include "xstudio/colour_pipeline/colour_pipeline.hpp"
-#include "xstudio/colour_pipeline/colour_pipeline_actor.hpp"
 #include "xstudio/global_store/global_store.hpp"
 #include "xstudio/media_reader/media_reader_actor.hpp"
 #include "xstudio/playhead/sub_playhead.hpp"
@@ -28,7 +25,6 @@ using namespace xstudio::utility;
 using namespace xstudio::global_store;
 using namespace xstudio::playhead;
 using namespace xstudio::media_reader;
-using namespace xstudio::colour_pipeline;
 using namespace caf;
 
 static caf::actor media_actor_;
@@ -105,12 +101,11 @@ void PlayheadActor::init() {
     set_exit_handler([=](scheduled_actor *a, caf::exit_msg &m) {
         disconnect_from_ui();
         audio_output_actor_ = caf::actor();
-        colour_pipeline_    = caf::actor();
         empty_clip_         = caf::actor();
         image_cache_        = caf::actor();
         key_playhead_       = caf::actor();
         pre_reader_         = caf::actor();
-        playheads_.clear();
+        sub_playheads_.clear();
         source_wrappers_.clear();
         source_actors_.clear();
         default_exit_handler(a, m);
@@ -125,7 +120,7 @@ void PlayheadActor::init() {
             send(this, utility::event_atom_v, utility::change_atom_v);
         } else {*/
         // child playhead kills itself if its source goes down
-        for (auto &ph : playheads_) {
+        for (auto &ph : sub_playheads_) {
             if (ph == msg.source) {
                 anon_send(this, utility::event_atom_v, utility::change_atom_v);
             }
@@ -165,8 +160,6 @@ void PlayheadActor::init() {
     link_to(viewport_events_group_);
     link_to(playhead_media_events_group_);
 
-    get_colour_pipeline();
-
     try {
 
         scoped_actor sys{system()};
@@ -185,12 +178,15 @@ void PlayheadActor::init() {
 
     // ensure we have a source and a child playhead, due to many messages
     // delagated to the child playhead
-    empty_clip_ = spawn<EditListActor>("EmptyClip blank", std::vector<caf::actor>());
+    empty_clip_ =
+        spawn<EditListActor>("EmptyClip blank", std::vector<caf::actor>(), media::MT_IMAGE);
     link_to(empty_clip_);
     make_child_playhead(empty_clip_);
     switch_key_playhead(0);
 
     audio_output_actor_ = system().registry().template get<caf::actor>(audio_output_registry);
+    playhead_events_actor_ =
+        system().registry().template get<caf::actor>(global_playhead_events_actor);
 
     pre_reader_ = system().registry().template get<caf::actor>(media_reader_registry);
 
@@ -216,8 +212,6 @@ void PlayheadActor::init() {
             clear_all_precache_requests(rp);
             return rp;
         },
-
-        [=](colour_pipeline_atom) -> caf::actor { return colour_pipeline_; },
 
         [=](const error &err) { spdlog::warn("{} {}", __PRETTY_FUNCTION__, to_string(err)); },
 
@@ -245,8 +239,8 @@ void PlayheadActor::init() {
             // scrubbing, we need to re-request the frame until the reader
             // finally responds and we do this with using the 'jump' atom
             // in a loop between sub-playhead and parent playhead like this:
-            caf::actor sub_playhead = caf::actor_cast<caf::actor>(sub_playhead_addr);
-            for (const auto &i : playheads_) {
+            auto sub_playhead = caf::actor_cast<caf::actor>(sub_playhead_addr);
+            for (const auto &i : sub_playheads_) {
                 if (i == sub_playhead) {
                     anon_send(
                         i,
@@ -281,6 +275,7 @@ void PlayheadActor::init() {
                                     },
                                     [=](const error &err) mutable { rp.deliver(err); });
                         } else {
+                            set_position(timebase::k_flicks_zero_seconds);
                             rp.deliver(false);
                         }
                     },
@@ -321,8 +316,8 @@ void PlayheadActor::init() {
         },
 
         [=](key_playhead_index_atom) -> int {
-            for (size_t i = 0; i < playheads_.size(); ++i) {
-                if (playheads_[i] == key_playhead_)
+            for (size_t i = 0; i < sub_playheads_.size(); ++i) {
+                if (sub_playheads_[i] == key_playhead_)
                     return (int)i;
             }
             return -1;
@@ -461,6 +456,10 @@ void PlayheadActor::init() {
             return rp;
         },
 
+        [=](utility::event_atom,
+            media::add_media_source_atom,
+            const utility::UuidActorVector &) { current_media_changed(media_actor_, true); },
+
         [=](playlist::select_media_atom, const UuidList &selection) {
             delegate(playlist_selection_, playlist::select_media_atom_v, selection);
         },
@@ -492,6 +491,7 @@ void PlayheadActor::init() {
             return clamped_estimated_playhead_position;
         },
 
+        [=](media_logical_frame_atom) -> int { return media_logical_frame_; },
 
         [=](position_atom,
             actor child,
@@ -505,7 +505,7 @@ void PlayheadActor::init() {
             // logical frame has changed
             if (child == key_playhead_) {
 
-
+                media_logical_frame_ = media_logical_frame;
                 send(
                     playhead_media_events_group_,
                     utility::event_atom_v,
@@ -531,8 +531,8 @@ void PlayheadActor::init() {
         },
 
         [=](redraw_viewport_atom) {
-            // force re-fetch of current frame and colour data and push to viewport for redraw,
-            // unless we're playing. Used by colour pipeline to redraw when colour is adjusted
+            // force re-fetch of current frame and push to viewport for redraw,
+            // unless we're playing.
             if (not playing() && connected_to_ui()) {
                 update_child_playhead_positions(true);
             }
@@ -546,6 +546,7 @@ void PlayheadActor::init() {
                 audio_output_actor_,
                 sound_audio_atom_v,
                 audio_buffers,
+                child_playhead_uuid,
                 playing(),
                 forward(),
                 velocity());
@@ -582,8 +583,26 @@ void PlayheadActor::init() {
                 // Tell anything measuring FPS that a new frame has been sent for display
                 send(fps_moniotor_group_, show_atom_v);
 
+                if (playhead_events_actor_) {
+                    send(playhead_events_actor_, show_atom_v, buf);
+                }
+
                 send(viewport_events_group_, ui::show_buffer_atom_v, playing());
             }
+        },
+
+        [=](colour_pipeline_lookahead_atom,
+            const media::AVFrameIDsAndTimePoints &frame_ids_for_colour_mgmnt_lookeahead) {
+            // For each media source that is within the lookahead read region, during playback,
+            // we have one AVFrameID .. these will get forwarded to the colour management
+            // plugin so it has a chance to load and parse newcerssary LUTs ahead of time so
+            // playback doesn't stutter when we have to put a source on the screen that
+            // hasn't been encountered yet and needs some heavy computation/IO for its colour
+            // managment particulars
+            send(
+                broadcast_,
+                colour_pipeline_lookahead_atom_v,
+                frame_ids_for_colour_mgmnt_lookeahead);
         },
 
         [=](buffer_atom) { delegate(key_playhead_, buffer_atom_v); },
@@ -763,7 +782,7 @@ void PlayheadActor::init() {
                 // this will trigger an update to the duration
                 anon_send(this, duration_flicks_atom_v);
 
-                // this will update the 'source_' attribute so it shows the correct
+                // this will update the 'image_source_' attribute so it shows the correct
                 // list of available sources in the UI, in case it has changed
                 request(key_playhead_, infinite, media_atom_v)
                     .then(
@@ -809,17 +828,17 @@ void PlayheadActor::init() {
                     request(media_source_actor, infinite, utility::parent_atom_v)
                         .then(
                             [=](caf::actor media_actor) {
-                                current_media_changed(media_actor);
+                                current_media_changed(media_actor, true);
 
                                 send(
                                     event_group_,
                                     utility::event_atom_v,
                                     media_source_atom_v,
-                                    media_actor);
+                                    UuidActor(media_uuid, media_actor));
 
                                 if (connected_to_ui()) {
                                     send(
-                                        colour_pipeline_,
+                                        broadcast_,
                                         utility::event_atom_v,
                                         media_source_atom_v,
                                         media_source_actor,
@@ -875,7 +894,7 @@ void PlayheadActor::init() {
             // ensures that the SubPlayhead is 'up-to-date' in other wordfs
             // it has got all the data it needs from its source to start playback
             // like duration, timecode and AVFrameID list
-            fan_out_request<policy::select_all>(playheads_, infinite, source_atom_v)
+            fan_out_request<policy::select_all>(sub_playheads_, infinite, source_atom_v)
                 .then(
                     [=](const std::vector<caf::actor>) mutable {
                         // now sending duration_flicks to ourselves means that duration, in/out
@@ -899,10 +918,35 @@ void PlayheadActor::init() {
 
         [=](utility::event_atom,
             media::current_media_source_atom,
-            UuidActor &,
-            const media::MediaType) {
+            UuidActor &media_source,
+            const media::MediaType mt) {
             // these come from Media actors (to which we have subscribed to the event group)
+            if (media_source.actor()) {
+                request(media_source.actor(), infinite, utility::name_atom_v)
+                    .then(
+                        [=](const std::string name) {
+                            updating_source_list_ = true;
+                            if (mt == media::MT_IMAGE) {
+                                image_source_->set_value(name);
+                            } else if (mt == media::MT_AUDIO) {
+                                audio_source_->set_value(name);
+                            }
+                            updating_source_list_ = false;
+                        },
+                        [=](const error &err) mutable {
+                            spdlog::warn("{} {}", __PRETTY_FUNCTION__, to_string(err));
+                        });
+            } else {
+                updating_source_list_ = true;
+                if (mt == media::MT_IMAGE) {
+                    image_source_->set_value("-");
+                } else if (mt == media::MT_AUDIO) {
+                    audio_source_->set_value("-");
+                }
+                updating_source_list_ = false;
+            }
         },
+        [=](utility::event_atom, media::media_status_atom, const media::MediaStatus ms) {},
 
         // controls creation and destruction of children
         [&](utility::event_atom, utility::change_atom) {
@@ -932,7 +976,19 @@ void PlayheadActor::init() {
 
         [=](utility::get_group_atom) -> caf::actor { return broadcast_; },
 
-        [=](utility::rate_atom atom) { delegate(key_playhead_, atom); },
+        [=](utility::rate_atom atom) -> result<FrameRate> {
+            auto rp = make_response_promise<FrameRate>();
+            request(key_playhead_, infinite, utility::rate_atom_v)
+                .then(
+                    [=](const FrameRate &rate) mutable { rp.deliver(rate); },
+                    [=](caf::error &) mutable {
+                        // skip errors (due to no source or out of range)
+                        // and return a sensible default
+                        rp.deliver(FrameRate(timebase::k_flicks_24fps));
+                    });
+
+            return rp;
+        },
 
         [=](utility::serialise_atom) -> result<JsonStore> {
             JsonStore jsn;
@@ -959,12 +1015,6 @@ void PlayheadActor::init() {
             return unit;
         },
 
-        [=](playhead::compare_mode_atom, const playhead::CompareMode mode) {
-            if (compare_mode() != mode) {
-                set_compare_mode(mode);
-            }
-        },
-
         [=](bool) {});
 }
 
@@ -975,18 +1025,30 @@ void PlayheadActor::connect_to_playlist_selection_actor(caf::actor playlist_sele
         // Here we subscribe to event messages from a PlaylistSelectionActor -
         // this will push lists of media to the playhead, when media is selected
         // from a playlist for playback. See 'new_source_list'.
-
+        playlist_selection_addr_ = caf::actor_cast<caf::actor_addr>(playlist_selection);
         request(playlist_selection, infinite, utility::get_event_group_atom_v)
             .then(
-                [=](caf::actor grp) { join_broadcast(this, grp); },
-                [=](const caf::error &e) {
-                    spdlog::warn("{} {}", __PRETTY_FUNCTION__, to_string(e));
-                });
-
-
-        request(playlist_selection, infinite, playhead::get_selected_sources_atom_v)
-            .then(
-                [=](const std::vector<caf::actor> &selection) { new_source_list(selection); },
+                [=](caf::actor grp) {
+                    request(grp, caf::infinite, broadcast::join_broadcast_atom_v)
+                        .then(
+                            [=](const bool) mutable {
+                                request(
+                                    playlist_selection,
+                                    infinite,
+                                    playhead::get_selected_sources_atom_v)
+                                    .then(
+                                        [=](const std::vector<caf::actor> &selection) {
+                                            new_source_list(selection);
+                                        },
+                                        [=](const caf::error &e) {
+                                            spdlog::warn(
+                                                "{} {}", __PRETTY_FUNCTION__, to_string(e));
+                                        });
+                            },
+                            [=](const error &err) mutable {
+                                spdlog::warn("{} {}", __PRETTY_FUNCTION__, to_string(err));
+                            });
+                },
                 [=](const caf::error &e) {
                     spdlog::warn("{} {}", __PRETTY_FUNCTION__, to_string(e));
                 });
@@ -995,7 +1057,7 @@ void PlayheadActor::connect_to_playlist_selection_actor(caf::actor playlist_sele
 
 void PlayheadActor::clear_all_precache_requests(caf::typed_response_promise<bool> rp) {
 
-    fan_out_request<policy::select_all>(playheads_, infinite, uuid_atom_v)
+    fan_out_request<policy::select_all>(sub_playheads_, infinite, uuid_atom_v)
         .then(
             [=](const std::vector<Uuid> uuids) mutable {
                 // stop any read-ahead activity for these playheads
@@ -1009,7 +1071,7 @@ void PlayheadActor::clear_all_precache_requests(caf::typed_response_promise<bool
 
 void PlayheadActor::clear_child_playheads() {
 
-    auto playheads_copy        = playheads_;
+    auto playheads_copy        = sub_playheads_;
     auto source_wrappers_copy_ = source_wrappers_;
 
     fan_out_request<policy::select_all>(playheads_copy, infinite, uuid_atom_v)
@@ -1033,7 +1095,7 @@ void PlayheadActor::clear_child_playheads() {
                 spdlog::warn("{} {}", __PRETTY_FUNCTION__, to_string(err));
             });
 
-    playheads_.clear();
+    sub_playheads_.clear();
     source_wrappers_.clear();
     key_playhead_ = caf::actor();
 }
@@ -1041,13 +1103,12 @@ void PlayheadActor::clear_child_playheads() {
 caf::actor PlayheadActor::make_child_playhead(caf::actor source) {
 
     std::stringstream nmstr;
-    nmstr << "ChildPlayhead" << playheads_.size();
+    nmstr << "ChildPlayhead" << sub_playheads_.size();
 
     caf::actor sub_playhead = spawn<SubPlayhead>(
         nmstr.str(),
         source,
         actor_cast<actor>(this),
-        colour_pipeline_,
         loop_start(),
         loop_end(),
         play_rate_mode(),
@@ -1055,24 +1116,35 @@ caf::actor PlayheadActor::make_child_playhead(caf::actor source) {
         media::MediaType::MT_IMAGE);
 
     link_to(sub_playhead);
-    playheads_.push_back(sub_playhead);
+    sub_playheads_.push_back(sub_playhead);
 
     join_event_group(this, sub_playhead);
     return sub_playhead;
 }
 
-caf::actor PlayheadActor::make_audio_child_playhead(caf::actor source) {
+void PlayheadActor::make_audio_child_playhead(const int source_index) {
+
+    if (source_index >= (int)source_actors_.size())
+        return;
 
     if (audio_playhead_) {
         unlink_from(audio_playhead_);
         send_exit(audio_playhead_, caf::exit_reason::user_shutdown);
+        unlink_from(audio_playhead_retimer_);
+        send_exit(audio_playhead_retimer_, caf::exit_reason::user_shutdown);
     }
+
+    // depending on compare mode, audio playhead needs different wrapper for
+    // sources
+    audio_playhead_retimer_ =
+        compare_mode() == CM_STRING
+            ? spawn<EditListActor>("EditListActor", source_actors_, media::MT_AUDIO)
+            : spawn<RetimeActor>("RetimeActor", source_actors_[source_index], media::MT_AUDIO);
 
     audio_playhead_ = spawn<SubPlayhead>(
         "AudioPlayhead",
-        source,
+        audio_playhead_retimer_,
         actor_cast<actor>(this),
-        colour_pipeline_,
         loop_start(),
         loop_end(),
         play_rate_mode(),
@@ -1080,6 +1152,8 @@ caf::actor PlayheadActor::make_audio_child_playhead(caf::actor source) {
         media::MediaType::MT_AUDIO);
 
     link_to(audio_playhead_);
+    link_to(audio_playhead_retimer_);
+
     auto ap = audio_playhead_;
     request(audio_playhead_, infinite, get_event_group_atom_v)
         .then(
@@ -1094,7 +1168,6 @@ caf::actor PlayheadActor::make_audio_child_playhead(caf::actor source) {
             [=](const error &err) {
                 spdlog::warn("{} {}", __PRETTY_FUNCTION__, to_string(err));
             });
-    return audio_playhead_;
 }
 
 void PlayheadActor::new_source_list(const std::vector<caf::actor> &sl) {
@@ -1112,6 +1185,10 @@ void PlayheadActor::new_source_list(const std::vector<caf::actor> &sl) {
     }
 
     source_actors_ = sl;
+
+    // reset the loop range as we have new sources
+    set_loop_start(timebase::k_flicks_low);
+    set_loop_end(timebase::k_flicks_max);
 
     // here we join the event group of the new sources - we can look out for
     // changes in the sources and 'do the needful'
@@ -1150,10 +1227,15 @@ void PlayheadActor::rebuild() {
 
         make_child_playhead(empty_clip_);
         switch_key_playhead(0);
+        set_position(timebase::k_flicks_zero_seconds);
+
+        // broadcast and empty buffer to clear the viewport
+        anon_send(this, show_atom_v, key_playhead_uuid_, ImageBufPtr(), true);
+
 
     } else if (compare_mode() == CM_STRING) {
 
-        auto foo = spawn<EditListActor>("EditListActor", source_actors_);
+        auto foo = spawn<EditListActor>("EditListActor", source_actors_, media::MT_IMAGE);
         link_to(foo);
         make_child_playhead(foo);
         switch_key_playhead(0);
@@ -1164,7 +1246,7 @@ void PlayheadActor::rebuild() {
         int count = 1;
         for (auto source : source_actors_) {
 
-            auto noo = spawn<RetimeActor>("RetimeActor", source);
+            auto noo = spawn<RetimeActor>("RetimeActor", source, media::MT_IMAGE);
             link_to(noo);
             make_child_playhead(noo);
             source_wrappers_.push_back(noo);
@@ -1192,6 +1274,8 @@ void PlayheadActor::rebuild() {
         // their durations so that they map to a common (shared) timeline
         align_clip_frame_numbers();
         anon_send(this, duration_flicks_atom_v);
+    } else {
+        anon_send(this, duration_flicks_atom_v);
     }
 }
 
@@ -1204,7 +1288,7 @@ void PlayheadActor::switch_key_playhead(int idx) {
         // current_media_uuid_, if so we'll pick that one.
         try {
             int i = 0;
-            for (auto &ph : playheads_) {
+            for (auto &ph : sub_playheads_) {
 
                 // this ensures that the child playhead is up-to-date and has
                 // got all the data it needs from its source
@@ -1227,15 +1311,16 @@ void PlayheadActor::switch_key_playhead(int idx) {
         }
     }
 
-    if (idx >= 0 && idx < (int)playheads_.size()) {
+    if (idx >= 0 && idx < (int)sub_playheads_.size()) {
 
-        key_playhead_ = playheads_[idx];
+        key_playhead_ = sub_playheads_[idx];
 
         try {
 
             auto source_actor = request_receive<caf::actor>(*sys, key_playhead_, source_atom_v);
-            make_audio_child_playhead(source_actor);
-            // this should update the 'source_' attribute so it shows the correct
+
+            make_audio_child_playhead(idx);
+            // this should update the 'image_source_' attribute so it shows the correct
             // list of available sources in the UI
             auto media_actor = request_receive<caf::actor>(*sys, key_playhead_, media_atom_v);
             if (media_actor)
@@ -1287,6 +1372,7 @@ void PlayheadActor::switch_key_playhead(int idx) {
             if (source_actors_.size()) { // suppress errors from empty EditListActor source
                 spdlog::warn("{} {}", __PRETTY_FUNCTION__, e.what());
             }
+            rebuild_cached_frames_status();
         }
 
     } else {
@@ -1331,7 +1417,7 @@ void PlayheadActor::update_child_playhead_positions(
 
     } else {
 
-        for (const auto &i : playheads_) {
+        for (const auto &i : sub_playheads_) {
             anon_send(
                 i,
                 jump_atom_v,
@@ -1351,7 +1437,7 @@ void PlayheadActor::update_child_playhead_positions(
 
 void PlayheadActor::notify_loop_end_changed() {
 
-    for (const auto &i : playheads_) {
+    for (const auto &i : sub_playheads_) {
         anon_send(i, simple_loop_end_atom_v, loop_end());
     }
     if (audio_playhead_) {
@@ -1373,7 +1459,7 @@ void PlayheadActor::notify_loop_end_changed() {
 
 void PlayheadActor::notify_loop_start_changed() {
 
-    for (const auto &i : playheads_) {
+    for (const auto &i : sub_playheads_) {
         anon_send(i, simple_loop_start_atom_v, loop_start());
     }
     if (audio_playhead_) {
@@ -1431,6 +1517,8 @@ void PlayheadActor::update_duration(caf::typed_response_promise<timebase::flicks
                             use_loop_range_atom_v,
                             use_loop_range());
                     }
+                } else {
+                    set_duration(duration);
                 }
                 rp.deliver(duration);
             },
@@ -1456,8 +1544,8 @@ void PlayheadActor::skip_through_sources(const int skip_by) {
         // Items are multi selected, so we only skip through the items selected
         // by switching to the child playhead
         int curr_idx = -1;
-        for (size_t i = 0; i < playheads_.size(); ++i) {
-            if (playheads_[i] == key_playhead_) {
+        for (size_t i = 0; i < sub_playheads_.size(); ++i) {
+            if (sub_playheads_[i] == key_playhead_) {
                 curr_idx = (int)i;
             }
         }
@@ -1467,9 +1555,10 @@ void PlayheadActor::skip_through_sources(const int skip_by) {
             int skip_idx = curr_idx + skip_by;
 
             curr_idx =
-                loop ? skip_idx == -1 ? static_cast<int>(playheads_.size() - 1)
-                                      : skip_idx % playheads_.size()
-                     : std::max(0, std::min(skip_idx, static_cast<int>(playheads_.size() - 1)));
+                loop ? skip_idx == -1 ? static_cast<int>(sub_playheads_.size() - 1)
+                                      : skip_idx % sub_playheads_.size()
+                     : std::max(
+                           0, std::min(skip_idx, static_cast<int>(sub_playheads_.size() - 1)));
 
             switch_key_playhead(curr_idx);
         }
@@ -1496,8 +1585,8 @@ void PlayheadActor::jump_to_source(const utility::Uuid &media_uuid) {
 
     } else {
 
-        for (size_t idx = 0; idx < playheads_.size(); ++idx) {
-            request(playheads_[idx], infinite, playlist::get_media_uuid_atom_v)
+        for (size_t idx = 0; idx < sub_playheads_.size(); ++idx) {
+            request(sub_playheads_[idx], infinite, playlist::get_media_uuid_atom_v)
                 .await(
                     [=](const utility::Uuid &playhead_media_uuid) {
                         if (playhead_media_uuid == media_uuid) {
@@ -1635,13 +1724,13 @@ void PlayheadActor::update_cached_frames_status(
 
 void PlayheadActor::rebuild_cached_frames_status() {
     if (key_playhead_ && image_cache_) {
-
         // fetch the full list of keys for every frame in the timeline
         request(key_playhead_, infinite, media_cache::keys_atom_v)
             .then(
 
                 [=](const media::MediaKeyVector &keys) mutable {
                     all_frames_keys_ = keys;
+
                     // now fetch the full list of keys for frames that are in the cache
                     request(image_cache_, infinite, media_cache::keys_atom_v)
                         .then(
@@ -1659,6 +1748,10 @@ void PlayheadActor::rebuild_cached_frames_status() {
                 [=](const error &err) {
                     spdlog::warn("B {} {}", __PRETTY_FUNCTION__, to_string(err));
                 });
+    } else {
+        all_frames_keys_.clear();
+        frames_cached_.clear();
+        update_cached_frames_status();
     }
 }
 
@@ -1666,7 +1759,7 @@ void PlayheadActor::align_clip_frame_numbers() {
 
     try {
 
-        if (playheads_.empty())
+        if (sub_playheads_.empty())
             return;
 
         scoped_actor sys{system()};
@@ -1703,7 +1796,7 @@ void PlayheadActor::align_clip_frame_numbers() {
         int max_duration = std::numeric_limits<int>::lowest();
 
 
-        for (auto &sub_playhead : playheads_) {
+        for (auto &sub_playhead : sub_playheads_) {
 
             // reset the offset to zero so we get the 'true' media first & last frame
             request_receive_wait<bool>(
@@ -1741,14 +1834,14 @@ void PlayheadActor::align_clip_frame_numbers() {
                                      "don't have overlapping frame range!");
         }
 
-        for (auto sub_playhead : playheads_) {
+        for (auto sub_playhead : sub_playheads_) {
 
             auto duration_flicks = request_receive_wait<timebase::flicks>(
                 *sys,
                 sub_playhead,
                 timeout,
                 logical_frame_to_flicks_atom_v,
-                align ? last_frame - first_frame : max_duration);
+                (align ? last_frame - first_frame : max_duration) + 1);
 
             if (position() > duration_flicks) {
                 // make sure the playhead position is within the new
@@ -1780,7 +1873,7 @@ void PlayheadActor::align_clip_frame_numbers() {
 
         // supressing errors as 'No Frames' is thrown when the source is empty,
         // which isn't really an error
-        spdlog::warn("{} {}", __PRETTY_FUNCTION__, e.what());
+        spdlog::debug("{} {}", __PRETTY_FUNCTION__, e.what());
     }
 }
 
@@ -1862,8 +1955,10 @@ void PlayheadActor::attribute_changed(const utility::Uuid &attr_uuid, const int 
         update_child_playhead_positions(true);
         send(fps_moniotor_group_, utility::event_atom_v, play_forward_atom_v, forward());
         send(broadcast_, play_forward_atom_v, forward());
-    } else if (attr_uuid == source_->uuid() && !updating_source_list_) {
-        switch_media_source(source_->value());
+    } else if (attr_uuid == image_source_->uuid() && !updating_source_list_) {
+        switch_media_source(image_source_->value(), media::MT_IMAGE);
+    } else if (attr_uuid == audio_source_->uuid() && !updating_source_list_) {
+        switch_media_source(audio_source_->value(), media::MT_AUDIO);
     } else if (attr_uuid == playing_->uuid()) {
 
         if (playing()) {
@@ -1896,13 +1991,6 @@ void PlayheadActor::connected_to_ui_changed() {
 
     if (connected_to_ui()) {
 
-        // ensure the colour pipeline(s) is connected to the UI too (note that
-        // the global colour pipeline manager will disconnect any other colour
-        // pipes that are currently attached)
-        auto colour_pipe_manager =
-            system().registry().template get<caf::actor>(colour_pipeline_registry);
-        send(colour_pipe_manager, module::connect_to_ui_atom_v, colour_pipeline_);
-
         restart_readahead_cacheing(true);
         update_playback_rate();
         send(fps_moniotor_group_, utility::event_atom_v, velocity_atom_v, velocity());
@@ -1917,7 +2005,7 @@ void PlayheadActor::connected_to_ui_changed() {
             .then(
                 [=](caf::actor media_actor) {
                     send(
-                        colour_pipeline_,
+                        broadcast_,
                         utility::event_atom_v,
                         media_source_atom_v,
                         media_actor,
@@ -1929,7 +2017,7 @@ void PlayheadActor::connected_to_ui_changed() {
 
     } else {
         // stop all cacheing
-        for (auto ph : playheads_) {
+        for (auto ph : sub_playheads_) {
             anon_send(ph, clear_precache_queue_atom_v);
         }
         if (audio_playhead_) {
@@ -1938,8 +2026,10 @@ void PlayheadActor::connected_to_ui_changed() {
     }
 }
 
-void PlayheadActor::current_media_changed(caf::actor media_actor) {
+void PlayheadActor::current_media_changed(caf::actor media_actor, const bool force) {
 
+    if (not force and media_actor_ == media_actor)
+        return;
     media_actor_ = media_actor;
     send(
         playhead_media_events_group_,
@@ -1947,28 +2037,54 @@ void PlayheadActor::current_media_changed(caf::actor media_actor) {
         playhead::media_atom_v,
         media_actor);
 
+    update_source_multichoice(image_source_, media::MT_IMAGE);
+    update_source_multichoice(audio_source_, media::MT_AUDIO);
+}
+
+void PlayheadActor::update_source_multichoice(
+    module::StringChoiceAttribute *attr, const media::MediaType mt) {
+
     // get the MediaSource items in the MediaActor
-    request(media_actor, infinite, media::current_media_source_atom_v)
+    request(media_actor_, infinite, media::current_media_source_atom_v, mt)
         .then(
             [=](const UuidActor &current_source) mutable {
+                if (playhead_events_actor_ && mt == media::MT_IMAGE) {
+                    // send new on screen media to global playhead events actor
+                    send(
+                        playhead_events_actor_,
+                        show_atom_v,
+                        media_actor_,
+                        current_source.actor());
+                }
+
                 request(current_source.actor(), infinite, utility::name_atom_v)
                     .then(
                         [=](const std::string &current_source_name) mutable {
-                            request(media_actor, infinite, media::get_media_source_names_atom_v)
+                            request(
+                                media_actor_,
+                                infinite,
+                                media::get_media_source_names_atom_v,
+                                mt)
                                 .then(
                                     [=](const std::vector<std::pair<utility::Uuid, std::string>>
                                             &source_uuid_names) mutable {
                                         updating_source_list_ = true;
-                                        source_->set_value(current_source_name);
+                                        attr->set_value(current_source_name);
 
                                         auto source_names =
                                             vpair_second_to_v(source_uuid_names);
                                         // sort names..
                                         std::sort(source_names.begin(), source_names.end());
 
-                                        source_->set_role_data(
+                                        if (source_names.empty()) {
+                                            source_names.emplace_back(
+                                                mt == media::MT_IMAGE ? "No Video"
+                                                                      : "No Audio");
+                                        }
+
+                                        attr->set_role_data(
                                             module::Attribute::StringChoices, source_names);
-                                        source_->set_role_data(
+                                        attr->set_role_data(
                                             module::Attribute::AbbrStringChoices, source_names);
                                         updating_source_list_ = false;
                                     },
@@ -1982,34 +2098,17 @@ void PlayheadActor::current_media_changed(caf::actor media_actor) {
                         });
             },
             [=](error &err) mutable {
-                spdlog::warn("{} {}", __PRETTY_FUNCTION__, to_string(err));
+                // media has no sources providing streams of type 'mt'
+                attr->set_value("N/A");
+                attr->set_role_data(
+                    module::Attribute::StringChoices,
+                    std::vector<std::string>(
+                        {mt == media::MT_IMAGE ? "No Video" : "No Audio"}));
+                attr->set_role_data(
+                    module::Attribute::AbbrStringChoices,
+                    std::vector<std::string>(
+                        {mt == media::MT_IMAGE ? "No Video" : "No Audio"}));
             });
-}
-
-void PlayheadActor::get_colour_pipeline() {
-    try {
-        auto sys = caf::scoped_actor(system());
-
-        auto colour_pipe_manager =
-            system().registry().template get<caf::actor>(colour_pipeline_registry);
-
-        auto cpipe = request_receive<caf::actor>(
-            *sys, colour_pipe_manager, colour_pipeline::get_colour_pipeline_atom_v);
-
-        if (colour_pipeline_ != cpipe) {
-
-            colour_pipeline_ = cpipe;
-
-            // make sure the colour pipeline is hooked up to the UI
-            if (connected_to_ui()) {
-                send(colour_pipe_manager, module::connect_to_ui_atom_v, colour_pipeline_);
-            }
-
-            send(actor_cast<caf::actor>(this), utility::event_atom_v, utility::change_atom_v);
-        }
-    } catch (std::exception &e) {
-        spdlog::warn("{} {}", __PRETTY_FUNCTION__, e.what());
-    }
 }
 
 void PlayheadActor::restart_readahead_cacheing(
@@ -2022,7 +2121,7 @@ void PlayheadActor::restart_readahead_cacheing(
             .then(
                 [=](bool r) {
                     if (all_child_playheads) {
-                        for (auto ph : playheads_) {
+                        for (auto ph : sub_playheads_) {
                             anon_send(ph, full_precache_atom_v, true, force);
                         }
 
@@ -2039,10 +2138,13 @@ void PlayheadActor::restart_readahead_cacheing(
     }
 }
 
-void PlayheadActor::switch_media_source(const std::string new_source_name) {
+void PlayheadActor::switch_media_source(
+    const std::string new_source_name, const media::MediaType mt) {
 
-    // get the current media actor
-    request(key_playhead_, infinite, media_source_atom_v, new_source_name)
+    // going via the sub-playhead (which resolves which actual MediaActor is
+    // on screen now), we make the request to change the active MediaSource
+    // for the MediaActor
+    request(key_playhead_, infinite, media_source_atom_v, new_source_name, mt)
         .then(
 
             [=](bool switched) mutable {
@@ -2050,11 +2152,30 @@ void PlayheadActor::switch_media_source(const std::string new_source_name) {
                 if (switched && connected_to_ui()) {
                     restart_readahead_cacheing(false, true);
                 }
+
+                // now, if we have a selection actor we want to try and switch all the
+                // media sources in the selected media too:
+                auto playlist_selection = caf::actor_cast<caf::actor>(playlist_selection_addr_);
+                if (playlist_selection) {
+
+                    request(playlist_selection, infinite, get_selection_atom_v, true)
+                        .then(
+                            [=](std::vector<caf::actor> selected_sources) mutable {
+                                for (auto &media_src : selected_sources) {
+                                    anon_send(
+                                        media_src, media_source_atom_v, new_source_name, mt);
+                                }
+                            },
+                            [=](error &err) mutable {
+                                spdlog::warn("{} {}", __PRETTY_FUNCTION__, to_string(err));
+                            });
+                }
             },
             [=](error &err) mutable {
                 spdlog::warn("{} {}", __PRETTY_FUNCTION__, to_string(err));
             });
 }
+
 
 void PlayheadActor::check_if_loop_range_makes_sense() {
 

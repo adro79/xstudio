@@ -11,7 +11,6 @@ CAF_PUSH_WARNINGS
 CAF_POP_WARNINGS
 
 #include "xstudio/ui/qml/helper_ui.hpp"
-#include "xstudio/ui/qml/media_ui.hpp"
 #include "xstudio/ui/keyboard.hpp"
 #include "xstudio/utility/frame_time.hpp"
 
@@ -149,6 +148,36 @@ namespace ui {
 
             utility::Uuid hotkey_uuid_;
         };
+
+        class HotkeyReferenceUI : public QMLActor {
+
+            Q_OBJECT
+
+            Q_PROPERTY(QString sequence READ sequence NOTIFY sequenceChanged)
+            Q_PROPERTY(
+                QUuid hotkeyUuid READ hotkeyUuid WRITE setHotkeyUuid NOTIFY hotkeyUuidChanged)
+
+          public:
+            explicit HotkeyReferenceUI(QObject *parent = nullptr);
+            ~HotkeyReferenceUI() override = default;
+
+            void init(caf::actor_system &system) override;
+
+            void setHotkeyUuid(const QUuid &uuid);
+
+            [[nodiscard]] const QUuid &hotkeyUuid() const { return uuid_; }
+            [[nodiscard]] const QString &sequence() const { return sequence_; }
+
+          signals:
+
+            void sequenceChanged();
+            void hotkeyUuidChanged();
+
+          private:
+            QString sequence_;
+            QUuid uuid_;
+        };
+
     } // namespace qml
 } // namespace ui
 } // namespace xstudio

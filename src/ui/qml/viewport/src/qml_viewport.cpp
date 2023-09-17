@@ -64,15 +64,15 @@ int qtModifierToOurs(const Qt::KeyboardModifiers qt_modifiers) {
 qt::OffscreenViewport *QMLViewport::offscreen_viewport_ = nullptr;
 
 
-QMLViewport::QMLViewport(QQuickItem *parent)
-    : QQuickItem(parent), current_fit_action("Revert Fit"), cursor_(Qt::ArrowCursor) {
+QMLViewport::QMLViewport(QQuickItem *parent) : QQuickItem(parent), cursor_(Qt::ArrowCursor) {
+
+    playhead_ = new PlayheadUI(this);
+    playhead_->init(CafSystemObject::get_actor_system());
 
     connect(this, &QQuickItem::windowChanged, this, &QMLViewport::handleWindowChanged);
-    static bool primary  = true;
-    is_primary_viewport_ = primary;
-    renderer_actor =
-        new QMLViewportRenderer(static_cast<QObject *>(this), is_primary_viewport_);
-    primary = false;
+    static int index = 0;
+    viewport_index_  = index++;
+    renderer_actor   = new QMLViewportRenderer(static_cast<QObject *>(this), viewport_index_);
     connect(renderer_actor, SIGNAL(zoomChanged(float)), this, SIGNAL(zoomChanged(float)));
     connect(
         renderer_actor,
@@ -108,9 +108,14 @@ QMLViewport::QMLViewport(QQuickItem *parent)
         this,
         SIGNAL(imageBoundaryInViewportChanged()));
 
+    connect(
+        renderer_actor,
+        SIGNAL(noAlphaChannelChanged(bool)),
+        this,
+        SLOT(setNoAlphaChannel(bool)));
+
     setAcceptedMouseButtons(Qt::AllButtons);
     setAcceptHoverEvents(true);
-
 
     if (!offscreen_viewport_) {
         try {
@@ -188,7 +193,7 @@ QMLViewport::makePointerEvent(Signature::EventType t, QMouseEvent *event, int fo
         width(),  // FIXME should be width, but this function appears to never be called.
         height(), // FIXME should be height
         qtModifierToOurs(event->modifiers()) + force_modifiers,
-        is_primary_viewport_ ? "primary_viewport" : "secondary_viewport");
+        fmt::format("viewport{0}", viewport_index_));
     p.w_ = utility::clock::now();
     return p;
 }
@@ -204,7 +209,7 @@ PointerEvent QMLViewport::makePointerEvent(
         w,
         h,
         modifiers,
-        is_primary_viewport_ ? "primary_viewport" : "secondary_viewport");
+        fmt::format("viewport{0}", viewport_index_));
 }
 
 static QOpenGLContext *__aa = nullptr;
@@ -223,6 +228,9 @@ void QMLViewport::sync() {
         connected_ = true;
     }
 
+    if (!window() || !renderer_actor)
+        return;
+
     // Tell the renderer the viewport coordinates. These are the 4 corners of the viewport
     // within the overall GL viewport,
     renderer_actor->setSceneCoordinates(
@@ -232,7 +240,7 @@ void QMLViewport::sync() {
         mapToScene(boundingRect().bottomLeft()),
         window()->size());
 
-    static bool share = false;
+    /*static bool share = false;
     if (window() && !share) {
         // //qDebug() << this << " OGL CONTEXT " << window()->openglContext() << "\n";
         if (window()->openglContext()) {
@@ -243,10 +251,10 @@ void QMLViewport::sync() {
                 window()->openglContext()->setShareContext(__aa);
                 share = true;
             }
-            /*//qDebug() << this << " SHARE " << window()->openglContext()->shareContext() <<
-            "\n";*/
+            //qDebug() << this << " SHARE " << window()->openglContext()->shareContext() <<
+    "\n";
         }
-    }
+    }*/
 }
 
 void QMLViewport::cleanup() {
@@ -401,8 +409,6 @@ void QMLViewport::setZoom(const float z) {
 void QMLViewport::revertFitZoomToPrevious(const bool ignoreOtherViewport) {
     if (renderer_actor)
         renderer_actor->revertFitZoomToPrevious();
-    if (other_viewport && !ignoreOtherViewport)
-        other_viewport->revertFitZoomToPrevious(true);
     window()->update();
 }
 
@@ -445,7 +451,7 @@ void QMLViewport::wheelEvent(QWheelEvent *event) {
         width(),  // FIXME should be width, but this function appears to never be called.
         height(), // FIXME should be height
         qtModifierToOurs(event->modifiers()),
-        is_primary_viewport_ ? "primary_viewport" : "secondary_viewport",
+        fmt::format("viewport{0}", viewport_index_),
         std::make_pair(event->angleDelta().rx(), event->angleDelta().ry()),
         std::make_pair(event->pixelDelta().rx(), event->pixelDelta().ry()));
 
@@ -460,11 +466,9 @@ void QMLViewport::wheelEvent(QWheelEvent *event) {
     QQuickItem::wheelEvent(event);
 }
 
-void QMLViewport::setPlayhead(QObject *playhead_qobject) {
+void QMLViewport::setPlayhead(caf::actor playhead) {
     spdlog::debug("QMLViewport::setPlayhead");
-    playhead_ = dynamic_cast<PlayheadUI *>(playhead_qobject);
-    emit(playheadChanged(playhead_qobject));
-    renderer_actor->set_playhead(playhead_);
+    playhead_->set_backend(playhead);
 }
 
 void QMLViewport::hideCursor() {
@@ -500,6 +504,13 @@ void QMLViewport::setFrameOutOfRange(bool frame_out_of_range) {
     if (frame_out_of_range != frame_out_of_range_) {
         frame_out_of_range_ = frame_out_of_range;
         emit frameOutOfRangeChanged();
+    }
+}
+
+void QMLViewport::setNoAlphaChannel(bool no_alpha_channel) {
+    if (no_alpha_channel != no_alpha_channel_) {
+        no_alpha_channel_ = no_alpha_channel;
+        emit noAlphaChannelChanged();
     }
 }
 
@@ -591,8 +602,4 @@ void QMLViewport::setRegularCursor(const Qt::CursorShape cname) {
     this->setCursor(cursor_);
 }
 
-void QMLViewport::setOtherViewport(QObject *object) {
-    auto vp = dynamic_cast<QMLViewport *>(object);
-    if (vp)
-        other_viewport = vp;
-}
+QString QMLViewport::name() const { return renderer_actor->name(); }

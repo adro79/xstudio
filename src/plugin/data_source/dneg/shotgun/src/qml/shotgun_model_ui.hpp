@@ -33,7 +33,7 @@ namespace ui {
             enum Roles { idRole = JSONTreeModel::Roles::LASTROLE, nameRole, typeRole };
 
             ShotgunSequenceModel(QObject *parent = nullptr) : JSONTreeModel(parent) {
-                setRoleNames({"idRole", "nameRole", "typeRole"});
+                setRoleNames(std::vector<std::string>({"idRole", "nameRole", "typeRole"}));
             }
             [[nodiscard]] QVariant
             data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
@@ -69,8 +69,8 @@ namespace ui {
             };
 
             ShotgunTreeModel(QObject *parent = nullptr) : JSONTreeModel(parent) {
-                setChildrenJsonPointer("/queries");
-                setRoleNames(
+                setChildren("queries");
+                setRoleNames(std::vector<std::string>(
                     {"argRole",
                      "detailRole",
                      "enabledRole",
@@ -81,7 +81,7 @@ namespace ui {
                      "queriesRole",
                      "liveLinkRole",
                      "termRole",
-                     "typeRole"});
+                     "typeRole"}));
                 connect(
                     this,
                     &QAbstractListModel::rowsInserted,
@@ -169,8 +169,7 @@ namespace ui {
             utility::JsonStore applyLiveLinkValue(
                 const utility::JsonStore &query, const utility::JsonStore &livelink);
 
-            virtual void
-            updateLiveLink(const int row, const QModelIndex &parent = QModelIndex());
+            virtual void updateLiveLink(const QModelIndex &index);
 
             void setSequenceMap(const QMap<int, ShotgunListModel *> *map) {
                 sequence_map_ = map;
@@ -396,7 +395,11 @@ namespace ui {
             Q_PROPERTY(QString sortRoleName READ sortRoleName WRITE setSortRoleName NOTIFY
                            sortRoleNameChanged)
 
-            // Q_PROPERTY(QObject * srcModel READ srcModel NOTIFY srcModelChanged)
+            Q_PROPERTY(QItemSelection selection READ selection WRITE setSelection NOTIFY
+                           selectionChanged)
+
+            Q_PROPERTY(QItemSelection selectionFilter READ selectionFilter WRITE
+                           setSelectionFilter NOTIFY selectionFilterChanged)
 
           public:
             ShotgunFilterModel(QObject *parent = nullptr) : QSortFilterProxyModel(parent) {
@@ -413,10 +416,18 @@ namespace ui {
                     &ShotgunFilterModel::lengthChanged);
                 connect(
                     this,
+                    &QAbstractListModel::modelReset,
+                    this,
+                    &ShotgunFilterModel::lengthChanged);
+                connect(
+                    this,
                     &QAbstractListModel::rowsRemoved,
                     this,
                     &ShotgunFilterModel::lengthChanged);
             }
+
+            [[nodiscard]] QItemSelection selection() const { return selection_sort_; }
+            [[nodiscard]] QItemSelection selectionFilter() const { return selection_filter_; }
 
             [[nodiscard]] int length() const { return rowCount(); }
             // [[nodiscard]] QObject *srcModel() const { return }
@@ -425,7 +436,8 @@ namespace ui {
             search(const QVariant &value, const QString &role = "display", const int start = 0);
             Q_INVOKABLE QVariant get(int row, const QString &role = "display");
 
-            Q_INVOKABLE QString getRoleFilter(const QString &role = "display");
+            Q_INVOKABLE [[nodiscard]] QString
+            getRoleFilter(const QString &role = "display") const;
             Q_INVOKABLE void
             setRoleFilter(const QString &filter, const QString &role = "display");
 
@@ -435,11 +447,32 @@ namespace ui {
 
             [[nodiscard]] QString sortRoleName() const {
                 try {
-                    return roleNames()[sortRole()];
+                    return roleNames().value(sortRole());
                 } catch (...) {
                 }
 
                 return QString();
+            }
+
+            void setSelection(const QItemSelection &selection) {
+                if (selection_sort_ != selection) {
+                    selection_sort_ = selection;
+                    emit selectionChanged();
+                    setDynamicSortFilter(false);
+                    sort(0, sortOrder());
+                    setDynamicSortFilter(true);
+                }
+            }
+
+            void setSelectionFilter(const QItemSelection &selection) {
+                if (selection_filter_ != selection) {
+                    selection_filter_ = selection;
+                    emit selectionFilterChanged();
+                    invalidateFilter();
+                    setDynamicSortFilter(false);
+                    sort(0, sortOrder());
+                    setDynamicSortFilter(true);
+                }
             }
 
             void setSortAscending(const bool ascending = true) {
@@ -470,13 +503,20 @@ namespace ui {
             void lengthChanged();
             void sortAscendingChanged();
             void sortRoleNameChanged();
+            void selectionChanged();
+            void selectionFilterChanged();
 
           protected:
             [[nodiscard]] bool
             filterAcceptsRow(int source_row, const QModelIndex &source_parent) const override;
+            [[nodiscard]] bool
+            lessThan(const QModelIndex &source_left, const QModelIndex &source_right) const;
 
           private:
             std::map<int, QString> roleFilterMap_;
+
+            QItemSelection selection_sort_;
+            QItemSelection selection_filter_;
         };
 
         class ShotModel : public ShotgunListModel {

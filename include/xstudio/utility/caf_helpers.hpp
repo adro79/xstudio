@@ -2,9 +2,9 @@
 #pragma once
 
 // required for ACTOR_TEST_SETUP
-
 namespace xstudio {
 namespace utility {
+
     template <class Fun> class scope_guard {
       public:
         scope_guard(Fun f) : fun_(std::move(f)), enabled_(true) {}

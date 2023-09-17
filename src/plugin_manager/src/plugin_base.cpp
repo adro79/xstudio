@@ -29,12 +29,14 @@ StandardPlugin::StandardPlugin(
 
         // fetch the current viewed playhead from the viewport so we can 'listen' to it
         // for position changes, current media changes etc.
-        auto viewport = system().registry().template get<caf::actor>(main_viewport_registry);
-        if (viewport) {
-            request(viewport, infinite, ui::viewport::viewport_playhead_atom_v)
+        auto playhead_events_actor =
+            system().registry().template get<caf::actor>(global_playhead_events_actor);
+        if (playhead_events_actor) {
+            request(playhead_events_actor, infinite, ui::viewport::viewport_playhead_atom_v)
                 .then(
-                    [=](caf::actor_addr playhead_addr) {
-                        current_viewed_playhead_changed(playhead_addr);
+                    [=](caf::actor playhead) {
+                        current_viewed_playhead_changed(
+                            caf::actor_cast<caf::actor_addr>(playhead));
                     },
                     [=](error &err) mutable {
                         spdlog::warn("{} {}", __PRETTY_FUNCTION__, to_string(err));
@@ -67,8 +69,8 @@ StandardPlugin::StandardPlugin(
             const bool offscreen) -> utility::BlindDataObjectPtr {
             return prepare_render_data(image, offscreen);
         },
-        [=](ui::viewport::overlay_render_function_atom, const bool is_main_viewer)
-            -> ViewportOverlayRendererPtr { return make_overlay_renderer(is_main_viewer); },
+        [=](ui::viewport::overlay_render_function_atom, const int viewer_index)
+            -> ViewportOverlayRendererPtr { return make_overlay_renderer(viewer_index); },
         [=](bookmark::build_annotation_atom, const utility::JsonStore &data)
             -> result<std::shared_ptr<bookmark::AnnotationBase>> {
             try {
@@ -125,7 +127,8 @@ void StandardPlugin::on_screen_media_changed(caf::actor media) {
         request(media, infinite, utility::name_atom_v)
             .then(
                 [=](const std::string name) mutable {
-                    request(media, infinite, media::current_media_source_atom_v)
+                    request(
+                        media, infinite, media::current_media_source_atom_v, media::MT_IMAGE)
                         .then(
 
                             [=](utility::UuidActor source) mutable {
@@ -407,6 +410,8 @@ void StandardPlugin::current_viewed_playhead_changed(caf::actor_addr viewed_play
     }
 
     if (viewed_playhead) {
+
+
         request(viewed_playhead, infinite, playhead::media_events_group_atom_v)
             .then(
                 [=](caf::actor playhead_media_events_broadcast_group) {
@@ -426,6 +431,15 @@ void StandardPlugin::current_viewed_playhead_changed(caf::actor_addr viewed_play
                     spdlog::warn("{} {}", __PRETTY_FUNCTION__, to_string(err));
                 });
 
+        request(viewed_playhead, infinite, playhead::media_atom_v)
+            .then(
+                [=](caf::actor current_media_actor) {
+                    on_screen_media_changed(current_media_actor);
+                },
+                [=](error &err) mutable {
+                    spdlog::warn("{} {}", __PRETTY_FUNCTION__, to_string(err));
+                });
+
         // make sure we have synced the bookmarks info from the playhead
         try {
             scoped_actor sys{system()};
@@ -438,5 +452,14 @@ void StandardPlugin::current_viewed_playhead_changed(caf::actor_addr viewed_play
         } catch (std::exception &e) {
             spdlog::warn("{} {}", __PRETTY_FUNCTION__, e.what());
         }
+    }
+}
+
+void StandardPlugin::qml_viewport_overlay_code(const std::string &code) {
+    if (!viewport_overlay_qml_code_) {
+        viewport_overlay_qml_code_ = add_qml_code_attribute("OverlayCode", code);
+        viewport_overlay_qml_code_->expose_in_ui_attrs_group("viewport_overlay_plugins");
+    } else {
+        viewport_overlay_qml_code_->set_value(code);
     }
 }

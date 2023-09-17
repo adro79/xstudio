@@ -13,13 +13,13 @@ XsWindow {
 	id: dialog
 	width: 300
 	height: r1.count*20 + 100
-    property var attributesGroupName
+    property var attributesGroupNames
 
     centerOnOpen: true
 
     XsModuleAttributesModel {
         id: attribute_set
-        attributesGroupName: dialog.attributesGroupName
+        attributesGroupNames: dialog.attributesGroupNames
     }
 
     RowLayout {
@@ -90,6 +90,23 @@ XsWindow {
                             Layout.fillWidth: true
                         }
                     }
+
+                    DelegateChoice {
+                        roleValue: "IntegerValue";
+                        XsIntAttrSlider {
+                            height: 20
+                            Layout.fillWidth: true
+                        }
+                    }
+
+                    DelegateChoice {
+                        roleValue: "ColourAttribute";
+                        XsColourChooser {
+                            height: 20
+                            Layout.fillWidth: true
+                        }
+                    }
+                    
 
                     DelegateChoice {
                         roleValue: "OnOffToggle";

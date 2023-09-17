@@ -163,6 +163,7 @@ namespace utility {
         operator const caf::actor &() const { return actor_; }
         operator utility::Uuid &() { return uuid_; }
         operator const utility::Uuid &() const { return uuid_; }
+        operator bool() const { return bool(actor_); }
 
         utility::Uuid &uuid() { return uuid_; }
         [[nodiscard]] const utility::Uuid &uuid() const { return uuid_; }
@@ -221,6 +222,11 @@ namespace utility {
           \return List size.
         */
         [[nodiscard]] size_t size() const { return uuids_.size(); }
+
+        /*!
+          \return next uuid size.
+        */
+        [[nodiscard]] utility::Uuid next_uuid(const utility::Uuid &uuid) const;
 
         /*! Insert new uuid
             \param uuid Uuid to insert

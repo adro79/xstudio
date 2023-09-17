@@ -29,7 +29,7 @@ namespace ui {
 
             void update_attrs_from_preferences(const utility::JsonStore &) override;
 
-            virtual caf::message_handler message_handler_extensions() {
+            caf::message_handler message_handler_extensions() override {
                 return message_handler_;
             }
 
@@ -37,7 +37,7 @@ namespace ui {
                 const media_reader::ImageBufPtr &, const bool /*offscreen*/) const override;
 
             plugin::ViewportOverlayRendererPtr
-            make_overlay_renderer(const bool is_main_viewer) override;
+            make_overlay_renderer(const int viewer_index) override;
 
             std::shared_ptr<bookmark::AnnotationBase>
             build_annotation(const utility::JsonStore &anno_data) override;
@@ -55,7 +55,7 @@ namespace ui {
             bool check_pointer_hover_on_text(
                 const Imath::V2f &pointer_pos, const float viewport_pixel_scale);
             void caption_drag(const Imath::V2f &p);
-            void end_stroke(const Imath::V2f &);
+            void end_stroke(const Imath::V2f & = Imath::V2f());
             void interact_start();
             void interact_end();
             void start_or_edit_caption(const Imath::V2f &p, const float viewport_pixel_scale);
